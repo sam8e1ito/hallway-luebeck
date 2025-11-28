@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useAuth } from "../hooks/authContext";
-import { createUserProfile, signOutUser } from "../firebase";
+import {
+    createUserProfile,
+    signOutUser,
+    updateUsernameUnique,
+} from "../firebase";
 
 export default function Profile() {
     const { user, profile, setProfile } = useAuth();
@@ -20,14 +24,39 @@ export default function Profile() {
                 `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(
                     username || user.uid
                 )}`;
+
+            const desiredUsername = username || profile?.username || null;
+
+            // If username changed, attempt atomic update/reservation
+            if (desiredUsername && desiredUsername !== profile?.username) {
+                try {
+                    await updateUsernameUnique(
+                        user.uid,
+                        desiredUsername,
+                        profile?.username
+                    );
+                } catch (e) {
+                    if (e.message === "USERNAME_TAKEN") {
+                        alert(
+                            "Username already taken — please choose another."
+                        );
+                        setLoading(false);
+                        return;
+                    }
+                    throw e;
+                }
+            }
+
+            // Update profile fields (merge)
             await createUserProfile(user.uid, {
-                username: username || profile?.username,
-                displayName: username || profile?.username,
+                username: desiredUsername,
+                displayName: desiredUsername,
                 photoURL,
             });
+
             setProfile({
                 ...(profile || {}),
-                username: username || profile?.username,
+                username: desiredUsername,
                 photoURL,
             });
             setSuccess(true);

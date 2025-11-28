@@ -18,6 +18,7 @@ import {
     getDocs,
     updateDoc,
     increment,
+    runTransaction,
 } from "firebase/firestore";
 import {
     getStorage,
@@ -76,6 +77,75 @@ export async function createUserProfile(
     };
     await setDoc(docRef, data, { merge: true });
     console.log("Profile saved:", data);
+}
+
+// Create a user profile while reserving a unique username atomically.
+export async function createUserProfileUnique(
+    uid,
+    { username, displayName, photoURL }
+) {
+    const userRef = doc(db, "users", uid);
+    if (!username) {
+        // fallback to normal profile creation
+        return createUserProfile(uid, { username, displayName, photoURL });
+    }
+    const unameKey = username.toLowerCase();
+    const usernameRef = doc(db, "usernames", unameKey);
+
+    try {
+        await runTransaction(db, async (t) => {
+            const unameSnap = await t.get(usernameRef);
+            if (unameSnap.exists()) {
+                throw new Error("USERNAME_TAKEN");
+            }
+            // reserve username
+            t.set(usernameRef, { uid });
+            // create user profile
+            const data = {
+                uid,
+                username,
+                displayName: displayName || null,
+                photoURL: photoURL || null,
+                likes: 0,
+                createdAt: serverTimestamp(),
+            };
+            t.set(userRef, data);
+        });
+    } catch (err) {
+        // rethrow for caller to handle
+        throw err;
+    }
+}
+
+// Update username atomically: reserve new username, update profile, remove old mapping
+export async function updateUsernameUnique(uid, newUsername, oldUsername) {
+    const newKey = newUsername?.toLowerCase();
+    const oldKey = oldUsername?.toLowerCase();
+    const usernameRefNew = doc(db, "usernames", newKey);
+    const usernameRefOld = oldKey ? doc(db, "usernames", oldKey) : null;
+    const userRef = doc(db, "users", uid);
+
+    await runTransaction(db, async (t) => {
+        // if new username equals old, nothing to do
+        if (newKey === oldKey) {
+            return;
+        }
+        const newSnap = await t.get(usernameRefNew);
+        if (newSnap.exists()) {
+            throw new Error("USERNAME_TAKEN");
+        }
+        // reserve new username
+        t.set(usernameRefNew, { uid });
+        // update user profile username
+        t.update(userRef, { username: newUsername });
+        // remove old username mapping if present
+        if (usernameRefOld) {
+            const oldSnap = await t.get(usernameRefOld);
+            if (oldSnap.exists() && oldSnap.data().uid === uid) {
+                t.delete(usernameRefOld);
+            }
+        }
+    });
 }
 
 export async function getUserProfile(uid) {

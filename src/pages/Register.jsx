@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { signUpWithEmail, createUserProfile } from "../firebase";
+import { signUpWithEmail, createUserProfileUnique } from "../firebase";
 import { useAuth } from "../hooks/authContext";
 
 export default function Register() {
@@ -43,12 +43,29 @@ export default function Register() {
                 username || uid
             )}`;
 
-            // Create profile and wait for it to complete
-            await createUserProfile(uid, {
-                username,
-                displayName: username,
-                photoURL,
-            });
+            // Create profile and reserve username atomically
+            try {
+                await createUserProfileUnique(uid, {
+                    username,
+                    displayName: username,
+                    photoURL,
+                });
+            } catch (e) {
+                if (e.message === "USERNAME_TAKEN") {
+                    // delete the created auth user to avoid orphaned accounts
+                    try {
+                        await cred.user.delete();
+                    } catch (delErr) {
+                        console.warn(
+                            "Failed to delete orphaned auth user:",
+                            delErr
+                        );
+                    }
+                    setError("Username already taken — please choose another.");
+                    return;
+                }
+                throw e;
+            }
 
             // Small delay to allow Firebase Auth state to update
             await new Promise((resolve) => setTimeout(resolve, 500));
